@@ -3,6 +3,7 @@
 import logging
 import math 
 import datetime
+import time
 
 """
 Support for AirCat air sensor.
@@ -18,7 +19,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.const import (CONF_NAME, TEMP_CELSIUS)
 
 _LOGGER = logging.getLogger(__name__)
-_INTERVAL = 15
+_INTERVAL = 60 #同步间隔多少秒
 
 SCAN_INTERVAL = datetime.timedelta(seconds=_INTERVAL)
 
@@ -26,11 +27,13 @@ DEFAULT_NAME = 'apparent_temperature'
 
 CONF_TS = "temperature_sensor"
 CONF_HS = "humidity_sensor"
+CONF_HUMIDITYOFFSETS="humidity_offsets"
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
     vol.Required(CONF_TS): cv.string,
     vol.Required(CONF_HS): cv.string,
+    vol.Required(CONF_HUMIDITYOFFSETS): cv.string,
 })
 
 def calc_heat_index(T, RH):
@@ -56,24 +59,33 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
     name = config.get(CONF_NAME)
     temperatureSensor = config.get(CONF_TS)
     humiditySensor = config.get(CONF_HS)
-    
+    humidity_offsets= config.get(CONF_HUMIDITYOFFSETS)
+    # mqtt = hass.components.mqtt
+    # if mqtt:
+    #     logging.info('获取到mqtt')
     devs = []
 
     devs.append(ApparentTSensor(
-        hass, temperatureSensor, humiditySensor, name))
+        hass, temperatureSensor, humiditySensor, name,humidity_offsets=humidity_offsets))
 
     add_devices(devs)
+    logging.info('初始化体感温度组件成功')
 
 class ApparentTSensor(Entity):
     """Implementation of a AirCat sensor."""
 
-    def __init__(self, hass, temperatureSensor, humiditySensor, name):
+    def __init__(self, hass, temperatureSensor, humiditySensor, name,humidity_offsets=None):
         """Initialize the AirCat sensor."""
         self._hass = hass
         self._name = name
         self._temperatureSensor = temperatureSensor
         self._humiditySensor = humiditySensor
         self._apparent_temperature = 0
+        self._updateTime=time.strftime("%Y-%m-%d %H:%M:%S") 
+        self._humidit = 0
+        self._temperature=0
+        self._humidity_offsets=humidity_offsets
+
 
     @property
     def name(self):
@@ -95,7 +107,18 @@ class ApparentTSensor(Entity):
         """返回当前的状态."""
         return self._apparent_temperature
 
+    @property
+    def state_attributes(self):
+        """Return the attributes of the entity."""
+        return {
+        'humidit': self._humidit,
+        'temperature': self._temperature,
+        'humidityOffsets': self._humidity_offsets,
+        'lastUpdateTime': self._updateTime
+
+        }
     def update(self):
+        self._updateTime=time.strftime("%Y-%m-%d %H:%M:%S") 
         """Update state."""
         t = 0.0
         h = 0.0
@@ -103,10 +126,17 @@ class ApparentTSensor(Entity):
         htry = self._hass.states.get(self._humiditySensor).state
         try:
             t = float(ttry)
-            h = float(htry)
+            h = float(htry) #人为调整湿度值
+
+            if self._humidity_offsets:
+                h +=float(self._humidity_offsets)
+
+            self._temperature=t
+            self._humidit=h
         except ValueError:
             _LOGGER.debug('Can not calc apparent_temperature with %s,T: %s, %s,h:%s', self._temperatureSensor,ttry,self._humiditySensor,htry)
             return
         self._apparent_temperature = calc_heat_index(t,h)
         _LOGGER.debug('%s,T: %s, %s,h:%s AT:%s', self._temperatureSensor,t,self._humiditySensor,h, self._apparent_temperature)
+
 
